@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: binance-price-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:binance_prices}
+    username: ${DB_USERNAME:binance}
+    password: ${DB_PASSWORD:binance}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+binance:
+  base-url: ${BINANCE_BASE_URL:https://api.binance.com}
+  symbols: ${BINANCE_SYMBOLS:BNBUSDT}
+  poll-interval: ${BINANCE_POLL_INTERVAL:PT30S}
+  connect-timeout: ${BINANCE_CONNECT_TIMEOUT:PT3S}
+  read-timeout: ${BINANCE_READ_TIMEOUT:PT10S}
+  default-retry-after: ${BINANCE_DEFAULT_RETRY_AFTER:PT1M}

@@ -1,0 +1,9 @@
+target/
+.env
+
+### IntelliJ IDEA ###
+.idea/
+*.iml
+
+### VS Code ###
+.vscode/
