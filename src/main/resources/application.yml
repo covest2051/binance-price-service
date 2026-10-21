@@ -15,6 +15,7 @@ spring:
           time_zone: UTC
 
 binance:
+  polling-enabled: true
   base-url: ${BINANCE_BASE_URL:https://api.binance.com}
   symbols: ${BINANCE_SYMBOLS:BNBUSDT}
   poll-interval: ${BINANCE_POLL_INTERVAL:PT30S}
