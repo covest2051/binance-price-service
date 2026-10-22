@@ -1,5 +1,6 @@
 package com.example.binanceprice.controller;
 
+import com.example.binanceprice.exception.InsufficientDataException;
 import com.example.binanceprice.exception.InvalidTimeRangeException;
 import com.example.binanceprice.exception.PriceDataNotFoundException;
 import com.example.binanceprice.exception.UnsupportedSymbolException;
@@ -27,6 +28,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(PriceDataNotFoundException.class)
     public ProblemDetail handleNotFound(PriceDataNotFoundException e) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+    }
+
+    @ExceptionHandler(InsufficientDataException.class)
+    public ProblemDetail handleInsufficientData(InsufficientDataException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, e.getMessage());
     }
 
     @Override

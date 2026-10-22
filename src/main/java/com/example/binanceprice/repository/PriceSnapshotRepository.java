@@ -38,4 +38,18 @@ public interface PriceSnapshotRepository extends Repository<PriceSnapshot, Long>
             WHERE symbol = :symbol AND fetched_at BETWEEN :from AND :to
             """, nativeQuery = true)
     Optional<BigDecimal> findAveragePrice(String symbol, Instant from, Instant to);
+
+    @Query(value = """
+            SELECT COUNT(*)       AS "count",
+                   SUM(x)         AS "sumX",
+                   SUM(price)     AS "sumY",
+                   SUM(x * price) AS "sumXY",
+                   SUM(x * x)     AS "sumXX",
+                   MIN(x)         AS "minX",
+                   MAX(x)         AS "maxX"
+            FROM (SELECT EXTRACT(EPOCH FROM fetched_at) AS x, price
+                  FROM price_snapshot
+                  WHERE symbol = :symbol AND fetched_at BETWEEN :from AND :to) points
+            """, nativeQuery = true)
+    TrendAggregates findTrendAggregates(String symbol, Instant from, Instant to);
 }

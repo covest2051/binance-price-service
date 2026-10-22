@@ -22,3 +22,6 @@ binance:
   connect-timeout: ${BINANCE_CONNECT_TIMEOUT:PT3S}
   read-timeout: ${BINANCE_READ_TIMEOUT:PT10S}
   default-retry-after: ${BINANCE_DEFAULT_RETRY_AFTER:PT1M}
+
+trend:
+  flat-threshold: ${TREND_FLAT_THRESHOLD:0.002}

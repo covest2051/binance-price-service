@@ -1,11 +1,16 @@
 package com.example.binanceprice.service;
 
 import com.example.binanceprice.config.BinanceProperties;
+import com.example.binanceprice.config.TrendProperties;
+import com.example.binanceprice.domain.RegressionSums;
 import com.example.binanceprice.domain.TimeRange;
+import com.example.binanceprice.domain.Trend;
+import com.example.binanceprice.domain.TrendCalculator;
 import com.example.binanceprice.entity.PriceSnapshot;
 import com.example.binanceprice.exception.PriceDataNotFoundException;
 import com.example.binanceprice.exception.UnsupportedSymbolException;
 import com.example.binanceprice.repository.PriceSnapshotRepository;
+import com.example.binanceprice.repository.TrendAggregates;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -22,10 +27,13 @@ public class PriceQueryService {
 
     private final PriceSnapshotRepository repository;
     private final Set<String> symbols;
+    private final TrendCalculator trendCalculator;
 
-    public PriceQueryService(PriceSnapshotRepository repository, BinanceProperties properties) {
+    public PriceQueryService(PriceSnapshotRepository repository, BinanceProperties binanceProperties,
+                             TrendProperties trendProperties) {
         this.repository = repository;
-        this.symbols = properties.symbols();
+        this.symbols = binanceProperties.symbols();
+        this.trendCalculator = new TrendCalculator(trendProperties.flatThreshold());
     }
 
     public PriceSnapshot getLatest(String symbol) {
@@ -45,6 +53,18 @@ public class PriceQueryService {
     public Page<PriceSnapshot> getPrices(String symbol, TimeRange range, int page, int size) {
         requireSupported(symbol);
         return repository.findPage(symbol, range.from(), range.to(), PageRequest.of(page, size));
+    }
+
+    public Trend getTrend(String symbol, TimeRange range) {
+        requireSupported(symbol);
+        TrendAggregates aggregates = repository.findTrendAggregates(symbol, range.from(), range.to());
+        if (aggregates.getCount() == 0) {
+            throw new PriceDataNotFoundException(
+                    "No prices for %s between %s and %s".formatted(symbol, range.from(), range.to()));
+        }
+        return trendCalculator.calculate(new RegressionSums(aggregates.getCount(),
+                aggregates.getSumX(), aggregates.getSumY(), aggregates.getSumXY(), aggregates.getSumXX(),
+                aggregates.getMinX(), aggregates.getMaxX()));
     }
 
     private void requireSupported(String symbol) {
