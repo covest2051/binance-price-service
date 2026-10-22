@@ -20,12 +20,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file:
-      - path: .env
-        required: false
+    # no value: taken from the shell or .env, unset ones keep application.yml defaults
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
+      DB_NAME:
+      DB_USERNAME:
+      DB_PASSWORD:
+      BINANCE_BASE_URL:
+      BINANCE_SYMBOLS:
+      BINANCE_POLL_INTERVAL:
+      BINANCE_CONNECT_TIMEOUT:
+      BINANCE_READ_TIMEOUT:
+      BINANCE_DEFAULT_RETRY_AFTER:
+      TREND_FLAT_THRESHOLD:
     ports:
       - "8080:8080"
     healthcheck:

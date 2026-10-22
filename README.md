@@ -15,8 +15,12 @@ docker compose up --build
 ```
 
 Поднимаются PostgreSQL и приложение на `http://localhost:8080`. Первый опрос — сразу после старта,
-дальше раз в `BINANCE_POLL_INTERVAL`. Настройки можно переопределить в `.env` (шаблон — `.env.example`),
-без него берутся значения по умолчанию.
+дальше раз в `BINANCE_POLL_INTERVAL`. Настройки задаются переменными окружения или в файле `.env`
+(шаблон — `.env.example`), без них берутся значения по умолчанию:
+
+```bash
+BINANCE_POLL_INTERVAL=PT10S BINANCE_SYMBOLS=BNBUSDT,ETHUSDT docker compose up --build
+```
 
 ### Локально
 
@@ -28,6 +32,7 @@ docker compose up -d postgres
 ```
 
 База из compose опубликована на порту 5433, чтобы не конфликтовать с локально установленным PostgreSQL.
+При локальном запуске настройки берутся только из переменных окружения, файл `.env` читает лишь compose.
 
 ### Тесты
 
