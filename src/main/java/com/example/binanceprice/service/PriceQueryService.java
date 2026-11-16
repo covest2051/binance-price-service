@@ -1,75 +1,84 @@
 package com.example.binanceprice.service;
 
 import com.example.binanceprice.config.BinanceProperties;
-import com.example.binanceprice.config.TrendProperties;
-import com.example.binanceprice.domain.RegressionSums;
-import com.example.binanceprice.domain.TimeRange;
-import com.example.binanceprice.domain.Trend;
-import com.example.binanceprice.domain.TrendCalculator;
-import com.example.binanceprice.entity.PriceSnapshot;
-import com.example.binanceprice.exception.PriceDataNotFoundException;
+import com.example.binanceprice.dto.request.PeriodRequest;
+import com.example.binanceprice.dto.response.AveragePriceResponse;
+import com.example.binanceprice.dto.response.PricePageResponse;
+import com.example.binanceprice.dto.response.PriceResponse;
+import com.example.binanceprice.dto.response.Trend;
+import com.example.binanceprice.dto.response.TrendResponse;
+import com.example.binanceprice.exception.PriceNotFoundException;
 import com.example.binanceprice.exception.UnsupportedSymbolException;
+import com.example.binanceprice.mapper.PriceMapper;
 import com.example.binanceprice.repository.PriceSnapshotRepository;
-import com.example.binanceprice.repository.TrendAggregates;
-import org.springframework.data.domain.Page;
+import com.example.binanceprice.repository.projection.TrendAggregates;
+import com.example.binanceprice.service.trend.TrendCalculator;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Set;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 
 @Service
+@RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class PriceQueryService {
 
-    // same scale as stored prices, NUMERIC(20, 8)
-    private static final int AVERAGE_SCALE = 8;
+    private static final int PRICE_SCALE = 8;
 
     private final PriceSnapshotRepository repository;
-    private final Set<String> symbols;
+    private final PriceMapper mapper;
     private final TrendCalculator trendCalculator;
+    private final BinanceProperties binanceProperties;
 
-    public PriceQueryService(PriceSnapshotRepository repository, BinanceProperties binanceProperties,
-                             TrendProperties trendProperties) {
-        this.repository = repository;
-        this.symbols = binanceProperties.symbols();
-        this.trendCalculator = new TrendCalculator(trendProperties.flatThreshold());
-    }
-
-    public PriceSnapshot getLatest(String symbol) {
+    public PriceResponse getLatest(String symbol) {
         requireSupported(symbol);
         return repository.findFirstBySymbolOrderByFetchedAtDescIdDesc(symbol)
-                .orElseThrow(() -> new PriceDataNotFoundException("No prices stored for " + symbol));
+                .map(mapper::toResponse)
+                .orElseThrow(() -> new PriceNotFoundException(symbol));
     }
 
-    public BigDecimal getAveragePrice(String symbol, TimeRange range) {
+    public AveragePriceResponse getAverage(String symbol, PeriodRequest period) {
         requireSupported(symbol);
-        return repository.findAveragePrice(symbol, range.from(), range.to())
-                .map(average -> average.setScale(AVERAGE_SCALE, RoundingMode.HALF_EVEN))
-                .orElseThrow(() -> new PriceDataNotFoundException(
-                        "No prices for %s between %s and %s".formatted(symbol, range.from(), range.to())));
+        BigDecimal average = repository.findAveragePrice(symbol, startOf(period.from()), endExclusive(period.to()))
+                .map(value -> value.setScale(PRICE_SCALE, RoundingMode.HALF_EVEN))
+                .orElseThrow(() -> new PriceNotFoundException(symbol, period.from(), period.to()));
+        return mapper.toAverageResponse(symbol, average);
     }
 
-    public Page<PriceSnapshot> getPrices(String symbol, TimeRange range, int page, int size) {
+    public PricePageResponse getPrices(String symbol, PeriodRequest period, int page, int size) {
         requireSupported(symbol);
-        return repository.findPage(symbol, range.from(), range.to(), PageRequest.of(page, size));
+        return mapper.toPageResponse(repository.findPage(symbol, startOf(period.from()), endExclusive(period.to()),
+                PageRequest.of(page, size)));
     }
 
-    public Trend getTrend(String symbol, TimeRange range) {
+    public TrendResponse getTrend(String symbol, PeriodRequest period) {
         requireSupported(symbol);
-        TrendAggregates aggregates = repository.findTrendAggregates(symbol, range.from(), range.to());
+        TrendAggregates aggregates =
+                repository.findTrendAggregates(symbol, startOf(period.from()), endExclusive(period.to()));
         if (aggregates.getCount() == 0) {
-            throw new PriceDataNotFoundException(
-                    "No prices for %s between %s and %s".formatted(symbol, range.from(), range.to()));
+            throw new PriceNotFoundException(symbol, period.from(), period.to());
         }
-        return trendCalculator.calculate(new RegressionSums(aggregates.getCount(),
-                aggregates.getSumX(), aggregates.getSumY(), aggregates.getSumXY(), aggregates.getSumXX(),
-                aggregates.getMinX(), aggregates.getMaxX()));
+        Trend trend = trendCalculator.calculate(aggregates);
+        return mapper.toTrendResponse(symbol, period, trend);
     }
 
     private void requireSupported(String symbol) {
-        if (!symbols.contains(symbol)) {
-            throw new UnsupportedSymbolException(symbol, symbols);
+        if (!binanceProperties.symbols().contains(symbol)) {
+            throw new UnsupportedSymbolException(symbol, binanceProperties.symbols());
         }
+    }
+
+    private static Instant startOf(LocalDate day) {
+        return day.atStartOfDay(ZoneOffset.UTC).toInstant();
+    }
+
+    private static Instant endExclusive(LocalDate lastDay) {
+        return startOf(lastDay.plusDays(1));
     }
 }

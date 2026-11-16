@@ -1,66 +1,43 @@
 package com.example.binanceprice.service;
 
-import com.example.binanceprice.client.AvgPrice;
-import com.example.binanceprice.client.BinanceApiException;
 import com.example.binanceprice.client.BinanceClient;
-import com.example.binanceprice.client.BinanceException;
-import com.example.binanceprice.client.BinanceRateLimitException;
+import com.example.binanceprice.client.dto.AvgPriceResponse;
+import com.example.binanceprice.client.exception.BinanceException;
+import com.example.binanceprice.client.exception.BinanceRateLimitException;
 import com.example.binanceprice.config.BinanceProperties;
-import com.example.binanceprice.repository.PriceSnapshotRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Set;
 
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class PricePollingService {
 
-    private static final Logger log = LoggerFactory.getLogger(PricePollingService.class);
-
     private final BinanceClient binanceClient;
-    private final PriceSnapshotRepository repository;
-    private final Set<String> symbols;
+    private final PriceSnapshotService snapshotService;
+    private final PollingPause pause;
+    private final BinanceProperties properties;
     private final Clock clock;
 
-    private volatile Instant pausedUntil = Instant.MIN;
-
-    public PricePollingService(BinanceClient binanceClient, PriceSnapshotRepository repository,
-                               BinanceProperties properties, Clock clock) {
-        this.binanceClient = binanceClient;
-        this.repository = repository;
-        this.symbols = properties.symbols();
-        this.clock = clock;
-    }
-
     public void pollAll() {
-        if (clock.instant().isBefore(pausedUntil)) {
-            log.info("Binance polling is paused until {}", pausedUntil);
+        if (pause.isActive()) {
+            log.info("Binance polling is paused until {}", pause.getPausedUntil());
             return;
         }
-        for (String symbol : symbols) {
+        for (String symbol : properties.symbols()) {
             try {
                 poll(symbol);
             } catch (BinanceRateLimitException e) {
-                // limits are per IP, pause all symbols
-                pausedUntil = clock.instant().plus(e.getRetryAfter());
-                if (e.isIpBanned()) {
-                    log.error("{}; polling paused until {}", e.getMessage(), pausedUntil);
-                } else {
-                    log.warn("{}; polling paused until {}", e.getMessage(), pausedUntil);
-                }
+                Instant pausedUntil = pause.pauseFor(e.getRetryAfter());
+                log.atLevel(e.getLogLevel()).log("{}; polling paused until {}", e.getMessage(), pausedUntil);
                 return;
-            } catch (BinanceApiException e) {
-                if (e.isClientError()) {
-                    log.error(e.getMessage());
-                } else {
-                    log.warn(e.getMessage());
-                }
             } catch (BinanceException e) {
-                log.warn(e.getMessage());
+                log.atLevel(e.getLogLevel()).log(e.getMessage());
             } catch (RuntimeException e) {
                 log.error("Failed to poll {}", symbol, e);
             }
@@ -68,14 +45,8 @@ public class PricePollingService {
     }
 
     private void poll(String symbol) {
-        AvgPrice avgPrice = binanceClient.getAvgPrice(symbol);
-        // seconds, as in API responses: to=<returned fetchedAt> must include this row
+        AvgPriceResponse avgPrice = binanceClient.getAvgPrice(symbol);
         Instant fetchedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
-        int inserted = repository.insertIfAbsent(symbol, avgPrice.price(), avgPrice.closeTime(), fetchedAt);
-        if (inserted == 0) {
-            log.debug("{}: no trades since closeTime {}, nothing stored", symbol, avgPrice.closeTime());
-        } else {
-            log.info("{}: stored price {} (closeTime {})", symbol, avgPrice.price(), avgPrice.closeTime());
-        }
+        snapshotService.save(symbol, avgPrice, fetchedAt);
     }
 }

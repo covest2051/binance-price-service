@@ -3,7 +3,7 @@
 Сервис по расписанию запрашивает у Binance среднюю цену торговых пар (`GET /api/v3/avgPrice`),
 сохраняет её в PostgreSQL и отдаёт через REST: последнюю цену, среднюю за период, список с пагинацией и тренд.
 
-Java 21, Spring Boot 3.5, PostgreSQL 16, Flyway, ShedLock, springdoc-openapi.
+Java 21, Spring Boot 3.5, PostgreSQL 16, Flyway, ShedLock, Lombok, MapStruct, springdoc-openapi.
 Тесты: JUnit 5, Mockito, Testcontainers, WireMock.
 
 ## Запуск
@@ -66,8 +66,8 @@ Swagger UI: http://localhost:8080/swagger-ui.html, health: http://localhost:8080
 
 У всех эндпоинтов необязательный параметр `symbol`, по умолчанию `BNBUSDT`. Пара не из `BINANCE_SYMBOLS` — 400.
 
-`from` и `to` — instant ISO-8601 в UTC (`2026-09-01T10:00:00Z`) или дата (`2026-09-01`).
-Дата в `from` означает начало дня, в `to` — весь день. Обе границы входят в период.
+`from` и `to` — даты ISO-8601 (`2026-09-01`), дни в UTC. Обе границы входят в период:
+`from=2026-09-01&to=2026-09-30` — с `2026-09-01T00:00:00Z` включительно до `2026-10-01T00:00:00Z` не включительно.
 
 ### Последняя цена
 
@@ -76,10 +76,10 @@ curl "http://localhost:8080/api/v1/prices/latest?symbol=BNBUSDT"
 ```
 
 ```json
-{"symbol":"BNBUSDT","price":"731.69700546","fetchedAt":"2026-10-20T12:43:51Z"}
+{"symbol":"BNBUSDT","price":731.69700546,"fetchedAt":"2026-10-20T12:43:51Z"}
 ```
 
-`fetchedAt` — время получения ответа от Binance.
+`fetchedAt` — время получения ответа от Binance. Цены во всех ответах — числа с 8 знаками после запятой.
 
 ### Средняя за период
 
@@ -88,7 +88,7 @@ curl "http://localhost:8080/api/v1/prices/average?from=2026-09-01&to=2026-09-30"
 ```
 
 ```json
-{"averagePrice":731.16666667}
+{"symbol":"BNBUSDT","averagePrice":731.16666667}
 ```
 
 ### Цены за период
@@ -98,7 +98,7 @@ curl "http://localhost:8080/api/v1/prices?from=2026-09-01&to=2026-09-30&page=0&s
 ```
 
 ```json
-{"items":[{"symbol":"BNBUSDT","price":"730.00000000","fetchedAt":"2026-09-01T10:00:00Z"}],"page":0,"size":20,"totalElements":135,"hasNext":true}
+{"items":[{"symbol":"BNBUSDT","price":730.00000000,"fetchedAt":"2026-09-01T10:00:00Z"}],"page":0,"size":20,"totalElements":135,"hasNext":true}
 ```
 
 `size` от 1 до 100, по умолчанию 20. Записи идут по `fetchedAt` по возрастанию.
@@ -117,17 +117,40 @@ curl "http://localhost:8080/api/v1/prices/trend?from=2026-09-01&to=2026-09-30"
 
 ### Ошибки
 
-Ответ в формате RFC 7807 (`application/problem+json`):
+Все ошибки, включая ошибки валидации, неизвестный путь, неподдерживаемый метод и непредвиденные исключения,
+отдаются в одном формате:
 
 ```json
-{"type":"about:blank","title":"Bad Request","status":400,"detail":"from (2026-09-02T00:00:00Z) is after to (2026-09-01T23:59:59.999999Z)","instance":"/api/v1/prices/average"}
+{"timestamp":"2026-11-16T13:10:29.151Z","status":400,"error":"Bad Request","message":"Validation failed","path":"/api/v1/prices/average","violations":[{"field":"validPeriod","message":"from must not be after to"}]}
 ```
+
+`violations` есть только у ошибок валидации. Для 500 детали исключения в ответ не попадают, только в лог.
 
 | Статус | Когда                                                                                     |
 |--------|-------------------------------------------------------------------------------------------|
 | 400    | пара не из конфигурации, нет `from`/`to`, неверный формат, `from` позже `to`, `page`/`size` вне диапазона |
-| 404    | нет данных: ни одной записи для `latest`, ни одной цены в периоде для `average` и `trend`   |
+| 404    | нет данных: ни одной записи для `latest`, ни одной цены в периоде для `average` и `trend`; неизвестный путь |
+| 405    | неподдерживаемый HTTP-метод                                                               |
 | 422    | для тренда в периоде меньше двух цен или все получены в одну секунду                      |
+| 500    | непредвиденная ошибка                                                                     |
+
+## Структура
+
+```
+client/       HTTP-клиент Binance, его DTO (client/dto) и исключения интеграции (client/exception)
+config/       конфигурация и @ConfigurationProperties
+controller/   REST-контроллер и GlobalExceptionHandler
+dto/          request- и response-DTO API
+entity/       JPA-сущность
+exception/    исключения приложения: ApplicationException → NotFound/BadRequest/Unprocessable → конкретные
+mapper/       MapStruct-маппер entity ↔ DTO
+repository/   Spring Data репозиторий и проекция агрегатов для тренда
+scheduler/    планировщик опроса с ShedLock
+service/      бизнес-логика; service/trend — расчёт тренда
+```
+
+Сущность не выходит за пределы сервисного слоя: сервисы возвращают DTO, маппинг — в `PriceMapper`.
+Чтение — в `@Transactional(readOnly = true)`, запись — в `PriceSnapshotService` с `@Transactional`.
 
 ## Решения
 
@@ -152,8 +175,8 @@ curl "http://localhost:8080/api/v1/prices/trend?from=2026-09-01&to=2026-09-30"
 - Хранится и `fetched_at` (часы сервиса), и `close_time` из ответа Binance (время последней сделки).
   Уникальный ключ `(symbol, close_time)` и `INSERT ... ON CONFLICT DO NOTHING`: повтор тика или отсутствие
   новых сделок не дают дублей, которые исказили бы среднюю.
-- Запрос к Binance выполняется вне транзакции, сохранение цены — отдельная транзакция из одного INSERT.
-  Частично записанных данных не бывает.
+- Запрос к Binance выполняется вне транзакции: соединение с базой не держится, пока идёт HTTP-запрос.
+  Сохранение — отдельная транзакция в `PriceSnapshotService` из одного INSERT.
 - `avgPrice` — снимок текущего состояния, истории у эндпоинта нет. Тик, пропущенный из-за сбоя,
   восстановить нельзя. Гарантия другая: каждый полученный ответ сохраняется ровно один раз.
 
@@ -170,8 +193,7 @@ curl "http://localhost:8080/api/v1/prices/trend?from=2026-09-01&to=2026-09-30"
   Scale 8 — максимальный `quoteAssetPrecision` на спотовом рынке Binance, 12 знаков целой части покрывают
   самый большой `maxPrice` (~3·10¹⁰ у BTCIDR).
 - Средняя считается в базе по `NUMERIC` и округляется до 8 знаков (`HALF_EVEN`).
-- Время — `Instant` и `timestamptz` в UTC. `fetched_at` хранится с точностью до секунды, как и отдаётся в API,
-  поэтому `to`, равный показанному `fetchedAt`, включает эту запись.
+- Время — `Instant` и `timestamptz` в UTC, `fetched_at` хранится с точностью до секунды.
 
 ### Тренд
 

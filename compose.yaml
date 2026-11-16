@@ -20,7 +20,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # no value: taken from the shell or .env, unset ones keep application.yml defaults
     environment:
       DB_HOST: postgres
       DB_PORT: 5432

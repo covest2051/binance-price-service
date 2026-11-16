@@ -1,11 +1,10 @@
 package com.example.binanceprice.service;
 
-import com.example.binanceprice.client.AvgPrice;
-import com.example.binanceprice.client.BinanceApiException;
 import com.example.binanceprice.client.BinanceClient;
-import com.example.binanceprice.client.BinanceRateLimitException;
+import com.example.binanceprice.client.dto.AvgPriceResponse;
+import com.example.binanceprice.client.exception.BinanceApiException;
+import com.example.binanceprice.client.exception.BinanceRateLimitException;
 import com.example.binanceprice.config.BinanceProperties;
-import com.example.binanceprice.repository.PriceSnapshotRepository;
 import com.example.binanceprice.support.MutableClock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -23,6 +23,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -34,13 +35,13 @@ class PricePollingServiceTest {
 
     private static final String FIRST = "BNBUSDT";
     private static final String SECOND = "ETHUSDT";
-    private static final AvgPrice AVG_PRICE =
-            new AvgPrice(new BigDecimal("731.69700546"), Instant.parse("2026-10-20T09:59:58.123Z"));
+    private static final AvgPriceResponse AVG_PRICE = new AvgPriceResponse(new BigDecimal("731.69700546"),
+            Instant.parse("2026-10-20T09:59:58.123Z").toEpochMilli());
 
     @Mock
     private BinanceClient binanceClient;
     @Mock
-    private PriceSnapshotRepository repository;
+    private PriceSnapshotService snapshotService;
 
     private final MutableClock clock = new MutableClock(Instant.parse("2026-10-20T10:00:00.750Z"));
     private PricePollingService service;
@@ -50,7 +51,7 @@ class PricePollingServiceTest {
         BinanceProperties properties = new BinanceProperties(URI.create("http://localhost"),
                 new LinkedHashSet<>(List.of(FIRST, SECOND)), Duration.ofSeconds(30),
                 Duration.ofSeconds(3), Duration.ofSeconds(10), Duration.ofMinutes(1));
-        service = new PricePollingService(binanceClient, repository, properties, clock);
+        service = new PricePollingService(binanceClient, snapshotService, new PollingPause(clock), properties, clock);
     }
 
     @Test
@@ -60,37 +61,37 @@ class PricePollingServiceTest {
         service.pollAll();
 
         Instant fetchedAt = Instant.parse("2026-10-20T10:00:00Z");
-        verify(repository).insertIfAbsent(FIRST, AVG_PRICE.price(), AVG_PRICE.closeTime(), fetchedAt);
-        verify(repository).insertIfAbsent(SECOND, AVG_PRICE.price(), AVG_PRICE.closeTime(), fetchedAt);
+        verify(snapshotService).save(FIRST, AVG_PRICE, fetchedAt);
+        verify(snapshotService).save(SECOND, AVG_PRICE, fetchedAt);
     }
 
     @Test
     void binanceErrorForOneSymbolDoesNotStopOthers() {
         when(binanceClient.getAvgPrice(FIRST))
-                .thenThrow(new BinanceApiException(FIRST, 400, "code -1121, Invalid symbol."));
+                .thenThrow(new BinanceApiException(FIRST, HttpStatus.BAD_REQUEST, "code -1121, Invalid symbol."));
         when(binanceClient.getAvgPrice(SECOND)).thenReturn(AVG_PRICE);
 
         service.pollAll();
 
-        verify(repository).insertIfAbsent(eq(SECOND), any(), any(), any());
-        verifyNoMoreInteractions(repository);
+        verify(snapshotService).save(eq(SECOND), any(), any());
+        verifyNoMoreInteractions(snapshotService);
     }
 
     @Test
     void databaseErrorForOneSymbolDoesNotStopOthers() {
         when(binanceClient.getAvgPrice(any())).thenReturn(AVG_PRICE);
-        when(repository.insertIfAbsent(eq(FIRST), any(), any(), any()))
-                .thenThrow(new DataAccessResourceFailureException("connection refused"));
+        doThrow(new DataAccessResourceFailureException("connection refused"))
+                .when(snapshotService).save(eq(FIRST), any(), any());
 
         service.pollAll();
 
-        verify(repository).insertIfAbsent(eq(SECOND), any(), any(), any());
+        verify(snapshotService).save(eq(SECOND), any(), any());
     }
 
     @Test
     void rateLimitSkipsBinanceCallsUntilRetryAfter() {
         when(binanceClient.getAvgPrice(FIRST))
-                .thenThrow(new BinanceRateLimitException(429, Duration.ofSeconds(60)))
+                .thenThrow(new BinanceRateLimitException(HttpStatus.TOO_MANY_REQUESTS, Duration.ofSeconds(60)))
                 .thenReturn(AVG_PRICE);
         when(binanceClient.getAvgPrice(SECOND)).thenReturn(AVG_PRICE);
 
